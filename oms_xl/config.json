@@ -1,0 +1,51 @@
+{
+  "_class_name": "UNet2DConditionWoCTModel",
+  "_diffusers_version": "0.23.1",
+  "_name_or_path": "h1t/oms_b_openclip_xl",
+  "subfolder": "oms_module", 
+  "act_fn": "silu",
+  "attention_head_dim": [
+    5,
+    10,
+    20
+  ],
+  "block_out_channels": [
+    160,
+    320,
+    640
+  ],
+  "center_input_sample": false,
+  "conv_in_kernel": 3,
+  "conv_out_kernel": 3,
+  "cross_attention_dim": 1024,
+  "cross_attention_norm": null,
+  "down_block_types": [
+    "DownBlock2D",
+    "CrossAttnDownBlock2D",
+    "CrossAttnDownBlock2D"
+  ],
+  "downsample_padding": 1,
+  "dual_cross_attention": false,
+  "encoder_hid_dim": null,
+  "encoder_hid_dim_type": null,
+  "in_channels": 4,
+  "layers_per_block": 2,
+  "mid_block_only_cross_attention": null,
+  "mid_block_scale_factor": 1,
+  "mid_block_type": "UNetMidBlock2DCrossAttn",
+  "norm_eps": 1e-05,
+  "norm_num_groups": 32,
+  "num_attention_heads": null,
+  "only_cross_attention": false,
+  "out_channels": 4,
+  "resnet_out_scale_factor": 1.0,
+  "sample_size": null,
+  "transformer_layers_per_block": 1,
+  "up_block_types": [
+    "CrossAttnUpBlock2D",
+    "CrossAttnUpBlock2D",
+    "UpBlock2D"
+  ],
+  "upcast_attention": false,
+  "use_linear_projection": false
+}
