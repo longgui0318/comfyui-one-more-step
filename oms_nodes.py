@@ -72,36 +72,45 @@ class CalculateMoreStepLatent:
     CATEGORY = "latent"
 
     def calculate_more(self,source_model, oms_model,seed,steps,cfg,sampler_name,scheduler,oms_positive,oms_negative, latents,):
-        latent_image = latents["samples"]
+        latents = copy.copy(latents)
+        org_latent_image = latents["samples"]
+        latent_image = org_latent_image
         if torch.count_nonzero(latent_image) > 0: #如何传入潜变量不为空，进行标准输入缩放
-            latent_image = source_model.inner_model.process_latent_in(latent_image)
+            latent_image = source_model.model.process_latent_in(latent_image)
         else:#若传入潜变量为空，则说明需要初始化一个空高斯分布的噪点图
             batch_inds = latents["batch_index"] if "batch_index" in latents else None
             latent_image = comfy.sample.prepare_noise(latent_image, seed, batch_inds)
+        latent_image = latent_image.to(source_model.load_device).to(oms_model.dtype)
         positive_cond = oms_positive[0][0]
         negative_cond = oms_negative[0][0]
+        if negative_cond.shape[2] != 1024 or positive_cond.shape[2] != 1024:
+            raise ValueError("The clip must use openclip!")
         oms_emb = torch.cat([positive_cond,negative_cond],dim=0)
+        oms_emb = oms_emb.to(source_model.load_device).to(oms_model.dtype)
         latent_input_oms = torch.cat([latent_image] * 2)
+        oms_model.to(source_model.load_device)
         v_pred_oms = oms_model(latent_input_oms,oms_emb)['sample']
         
-        
         sigmas = self._calculate_sigmas(steps,source_model.model.model_sampling,scheduler,sampler_name)
-        sigmas = sigmas.to(source_model.load_device)
+        sigmas = sigmas.to(source_model.load_device).to(oms_model.dtype)
         alphas_cumprod = 1./(1.+sigmas**2)
-        alpha_prod_t_prev =  alphas_cumprod[int(sigmas[0].item())] 
+        alpha_prod_t_prev =  alphas_cumprod[0] 
         
-        latents = self.oms_step(v_pred_oms, latent_image,cfg, seed, alpha_prod_t_prev)
+        result_latents = self.oms_step(v_pred_oms, latent_image,cfg, seed, alpha_prod_t_prev)
         #以上是潜变量的正常生成，后续需要使用潜变量交给Ksampler进行处理，所以需要进行下面两步操作
-        #1.将潜变量进行标准输出缩放
-        latents = source_model.inner_model.process_latent_out(latents)
-        #2.潜变量在ksampler过程中会进行噪声处理，需要提前进行，但这一步是额外的，因为我们提前处理了潜变量
-        noise = source_model.model.model_sampling.noise_scaling(sigmas[0],latent_image,torch.zeros_like(latent_image),self.max_denoise(source_model, sigmas))
-        latents = latents-noise
+        #1.潜变量在ksampler过程中会进行噪声处理，需要提前进行，但这一步是额外的，因为我们提前处理了潜变量
+        noise = source_model.model.model_sampling.noise_scaling(sigmas[0],latent_image,torch.zeros_like(latent_image),self.max_denoise(source_model.model.model_sampling.sigma_max, sigmas))
+        result_latents = result_latents-noise
+        #2.将潜变量进行标准输出缩放
+        result_latents = source_model.model.process_latent_out(result_latents)
+        result_latents = result_latents.to(org_latent_image.device).to(org_latent_image.dtype)
+        oms_model.to(source_model.offload_device)
+        latents["samples"] = result_latents
         return (latents,)
     
     
-    def max_denoise(self, model_wrap, sigmas):
-        max_sigma = float(model_wrap.inner_model.model_sampling.sigma_max)
+    def max_denoise(self, sigma_max, sigmas):
+        max_sigma = float(sigma_max)
         sigma = float(sigmas[0])
         return math.isclose(max_sigma, sigma, rel_tol=1e-05) or sigma > max_sigma
     
