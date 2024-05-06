@@ -1,5 +1,6 @@
 import os
 import copy
+import math
 import torch
 import folder_paths
 
@@ -86,13 +87,23 @@ class CalculateMoreStepLatent:
         
         sigmas = self._calculate_sigmas(steps,source_model.model.model_sampling,scheduler,sampler_name)
         sigmas = sigmas.to(source_model.load_device)
-                ## Perform OMS
-        # alphas_cumprod = self.scheduler.alphas_cumprod.to(device)
-        # alpha_prod_t_prev =  alphas_cumprod[int(timesteps[0].item())] 
+        alphas_cumprod = 1./(1.+sigmas**2)
+        alpha_prod_t_prev =  alphas_cumprod[int(sigmas[0].item())] 
         
-        
-        # latents = self.oms_step(v_pred_oms, latents, cfg, generator, alpha_prod_t_prev)
+        latents = self.oms_step(v_pred_oms, latent_image,cfg, seed, alpha_prod_t_prev)
+        #以上是潜变量的正常生成，后续需要使用潜变量交给Ksampler进行处理，所以需要进行下面两步操作
+        #1.将潜变量进行标准输出缩放
+        latents = source_model.inner_model.process_latent_out(latents)
+        #2.潜变量在ksampler过程中会进行噪声处理，需要提前进行，但这一步是额外的，因为我们提前处理了潜变量
+        noise = source_model.model.model_sampling.noise_scaling(sigmas[0],latent_image,torch.zeros_like(latent_image),self.max_denoise(source_model, sigmas))
+        latents = latents-noise
         return (latents,)
+    
+    
+    def max_denoise(self, model_wrap, sigmas):
+        max_sigma = float(model_wrap.inner_model.model_sampling.sigma_max)
+        sigma = float(sigmas[0])
+        return math.isclose(max_sigma, sigma, rel_tol=1e-05) or sigma > max_sigma
     
     def _calculate_sigmas(self,steps,model_sampling,scheduler,sampler_name):
         sigmas = None
@@ -110,9 +121,9 @@ class CalculateMoreStepLatent:
         
 
     
-    def oms_step(self, predict_v, latents, oms_guidance_scale, generator, alpha_prod_t_prev):
+    def oms_step(self, predict_v, latents, cfg, seed, alpha_prod_t_prev):
         pred_uncond, pred_text = predict_v.chunk(2)
-        predict_v = pred_uncond + oms_guidance_scale * (pred_text - pred_uncond)
+        predict_v = pred_uncond + cfg * (pred_text - pred_uncond)
         # so fking dirty but keep it for now
         alpha_prod_t = torch.zeros_like(alpha_prod_t_prev)
         beta_prod_t = 1 - alpha_prod_t
@@ -129,6 +140,7 @@ class CalculateMoreStepLatent:
         # TODO unit variance but seem dont need it
 
         device = latents.device
+        generator = torch.manual_seed(seed)
         variance_noise = randn_tensor(
             latents.shape, generator=generator, device=device, dtype=latents.dtype
         )
