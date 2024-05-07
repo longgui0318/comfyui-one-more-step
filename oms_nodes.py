@@ -3,6 +3,7 @@ import copy
 import math
 import torch
 import folder_paths
+import numpy as np
 
 import comfy.model_patcher
 import comfy.ldm.models.autoencoder
@@ -10,11 +11,45 @@ import comfy.utils
 import comfy.sample
 import comfy.samplers
 import comfy.sampler_helpers
+from comfy.extra_samplers.uni_pc import SigmaConvert
 from .unet_2d_condition_woct import UNet2DConditionWoCTModel
 
 from diffusers import StableDiffusionPipeline,UNet2DConditionModel
 from diffusers.utils.torch_utils import randn_tensor
 from comfy import model_management
+
+from diffusers.schedulers import (
+            CMStochasticIterativeScheduler,
+            DDIMInverseScheduler,
+            DDIMParallelScheduler,
+            DDIMScheduler,
+            DDPMParallelScheduler,
+            DDPMScheduler,
+            DDPMWuerstchenScheduler,
+            DEISMultistepScheduler,
+            DPMSolverMultistepInverseScheduler,
+            DPMSolverMultistepScheduler,
+            DPMSolverSinglestepScheduler,
+            EDMDPMSolverMultistepScheduler,
+            EDMEulerScheduler,
+            EulerAncestralDiscreteScheduler,
+            EulerDiscreteScheduler,
+            HeunDiscreteScheduler,
+            IPNDMScheduler,
+            KarrasVeScheduler,
+            KDPM2AncestralDiscreteScheduler,
+            KDPM2DiscreteScheduler,
+            LCMScheduler,
+            PNDMScheduler,
+            RePaintScheduler,
+            SASolverScheduler,
+            SchedulerMixin,
+            ScoreSdeVeScheduler,
+            TCDScheduler,
+            UnCLIPScheduler,
+            UniPCMultistepScheduler,
+            VQDiffusionScheduler,
+        )
 
   
 class LoadMoreStepModel:
@@ -90,11 +125,16 @@ class CalculateMoreStepLatent:
         latent_input_oms = torch.cat([latent_image] * 2)
         oms_model.to(source_model.load_device)
         v_pred_oms = oms_model(latent_input_oms,oms_emb)['sample']
-        
+        # self._test()
+        # self._test2(source_model.model.model_sampling)
         sigmas = self._calculate_sigmas(steps,source_model.model.model_sampling,scheduler,sampler_name)
-        sigmas = sigmas.to(source_model.load_device).to(oms_model.dtype)
-        alphas_cumprod = 1./(1.+sigmas**2)
-        alpha_prod_t_prev =  alphas_cumprod[0] 
+        sigma_convert = SigmaConvert()
+        alpha_t = sigma_convert.marginal_alpha(sigmas[0])
+        alpha_prod_t_prev = alpha_t 
+        alpha_prod_t_prev = alpha_prod_t_prev.to(source_model.load_device).to(oms_model.dtype)
+        # print(sampler_name,format(alpha_prod_t_prev.item(), '.10f'))
+        # if alpha_prod_t_prev.item() != 0:
+        #     raise ValueError("alpha_prod_t_prev is zero!")
         
         result_latents = self.oms_step(v_pred_oms, latent_image,cfg, seed, alpha_prod_t_prev)
         #以上是潜变量的正常生成，后续需要使用潜变量交给Ksampler进行处理，所以需要进行下面两步操作
@@ -127,10 +167,55 @@ class CalculateMoreStepLatent:
         if discard_penultimate_sigma:
             sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])
         return sigmas
+    
+    def _test2(self,model_sampling):
+        samplers = comfy.samplers.KSampler.SAMPLERS
+        schedulers = comfy.samplers.KSampler.SCHEDULERS
+        for sampler_name in samplers:
+            for scheduler in schedulers:
+                sigmas = self._calculate_sigmas(20,model_sampling,scheduler,sampler_name)
+                sigma_convert = SigmaConvert()
+                alpha_t = sigma_convert.marginal_alpha(sigmas[0])
+                alpha_prod_t_prev = alpha_t                 
+                print(sampler_name,scheduler,format(alpha_prod_t_prev.item(), '.10f'))
         
-
+    def _test(self):
+        list = [
+            DDIMInverseScheduler,
+            DDIMParallelScheduler,
+            DDIMScheduler,
+            DDPMParallelScheduler,
+            DDPMScheduler,
+            DEISMultistepScheduler,
+            DPMSolverMultistepInverseScheduler,
+            DPMSolverMultistepScheduler,
+            DPMSolverSinglestepScheduler,
+            EulerAncestralDiscreteScheduler,
+            EulerDiscreteScheduler,
+            HeunDiscreteScheduler,
+            KDPM2AncestralDiscreteScheduler,
+            KDPM2DiscreteScheduler,
+            LCMScheduler,
+            PNDMScheduler,
+            RePaintScheduler,
+            SASolverScheduler,
+            TCDScheduler,
+            UnCLIPScheduler,
+            UniPCMultistepScheduler
+            ]
+        
+        for s in list:
+            c = s()
+            c.set_timesteps(20)
+            timesteps =  c.timesteps
+            alphas_cumprod = c.alphas_cumprod
+            alpha_prod_t_prev =  alphas_cumprod[int(timesteps[0].item())] 
+            num = alpha_prod_t_prev.item()
+            print(str(c.__class__),format(num, '.10f'))
+            
     
     def oms_step(self, predict_v, latents, cfg, seed, alpha_prod_t_prev):
+        
         pred_uncond, pred_text = predict_v.chunk(2)
         predict_v = pred_uncond + cfg * (pred_text - pred_uncond)
         # so fking dirty but keep it for now
